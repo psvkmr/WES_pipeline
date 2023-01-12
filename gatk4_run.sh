@@ -238,8 +238,9 @@ tabix test.vcf.gz
 # calcualte genotype priors
 # get 1000 genomes ref file for accuracy
 #wget https://storage.googleapis.com/genomics-public-data/resources/broad/hg38/v0/1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38.vcf
-bgzip 1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38.vcf
-tabix 1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38.vcf.gz
+#bgzip 1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38.vcf
+#tabix 1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38_nochr.vcf.gz
+sed 's/chr//g' 1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38.vcf > 1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38_nochr.vcf
 gatk CalculateGenotypePosteriors -V test.vcf.gz -supporting ref/1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38.vcf.gz -O cgp.vcf.gz
 
 # hard filter on low qual variants
