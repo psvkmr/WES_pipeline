@@ -1,11 +1,12 @@
 # WES pipeline with snakemake
 
-#conda create -n gatk_snake -c bioconda gatk4 fastqc multiqc fastx_toolkit bwa samtools bcftools=1.9 ensembl-vep r-ggplot2 snakemake r-base
+# use bcftools annotate --rename-chrs
+
+#conda create -n gatk_snake -c bioconda gatk4 fastqc multiqc fastx_toolkit bwa samtools bcftools=1.9 ensembl-vep r-ggplot2 snakemake r-base r-data.table r-tidyverse
 #conda activate gatk_snake
 
-# test fastqs from wes dir
 #mkdir fastqs
-#for fastq in $(ls ../wes/fastqs/); do gunzip -c ../wes/fastqs/$fastq | head -n 50000 | gzip -c > fastqs/$fastq ; done 
+#for fastq in $(ls fastqs/); do gunzip -c fastqs/$fastq | head -n 50000 | gzip -c > fastqs/$fastq ; done 
 
 import os
 
@@ -62,7 +63,7 @@ rule multiqc_fastqc:
         multiqc {input} -o {params.dir} 2>> {log}
         """
 
-# omitted read group due to format issue: -R {params}
+# create index: bwa index Homo_sapiens_assembly38.fasta
 rule bwa_map:
     input:
         fq1='fastqs/{sample}_1.fastq.gz',
@@ -77,7 +78,7 @@ rule bwa_map:
         """
         date > {log}
         bwa mem -M -R "@RG\\tID:{params.id}\\tSM:{params.id}\\tLB:WES\\tPL:Illumina" \
-        ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz {input.fq1} {input.fq2} > {output} 2>> {log}
+        ref/Homo_sapiens_assembly38.fasta {input.fq1} {input.fq2} > {output} 2>> {log}
         """
 
 rule samtools_bam:
@@ -171,10 +172,10 @@ rule gatk_bqsr:
     shell:
         """
         date >> {log}
-        gatk BaseRecalibrator -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa -I {input} \
-        --known-sites ../wes/ref/resources_broad_hg38_v0_Mills_and_1000G_gold_standard.indels.hg38_nochr.vcf.gz \ 
-        --known-sites ../wes/ref/resources_broad_hg38_v0_1000G_phase1.snps.high_confidence.hg38_nochr.vcf.gz \
-        --known-sites ../wes/ref/resources_broad_hg38_v0_Homo_sapiens_assembly38.dbsnp138_nochr.vcf.gz \
+        gatk BaseRecalibrator -R ref/Homo_sapiens_assembly38.fasta -I {input} \
+        --known-sites ref/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz \ 
+        --known-sites ref/1000G_phase1.snps.high_confidence.hg38.vcf.gz \
+        --known-sites ref/Homo_sapiens_assembly38.dbsnp138.vcf \
         -O {output} 2>> {log}
         """
 
@@ -218,9 +219,10 @@ rule samtools_mpileups:
     shell:
         """ 
         date >> {log}
-        samtools mpileup -f ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa -s {input} 2>> {log} | sed -n '500,515p' > {output}
+        samtools mpileup -f ref/Homo_sapiens_assembly38.fasta -s {input} 2>> {log} | sed -n '500,515p' > {output}
         """
 
+# need to have fasta dict file created: gatk CreateSequenceDictionary -R ref/Homo_sapiens_assembly38.fasta
 rule gatk_haplotype_caller:
     input:
         bams=rules.gatk_fix_mates.output, 
@@ -232,7 +234,7 @@ rule gatk_haplotype_caller:
     shell:
         """
         date > {log}
-        gatk HaplotypeCaller -ERC GVCF -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        gatk HaplotypeCaller -ERC GVCF -R ref/Homo_sapiens_assembly38.fasta \
         -I {input.bams} -O {output} 2>> {log}
         """
 
@@ -294,8 +296,9 @@ rule gatk_genomicsdb:
     shell:
         """
         date > {log}
-        gatk GenomicsDBImport -L 1 -L 2 -L 3 -L 4 -L 5 -L 6 -L 7 -L 8 -L 9 -L 10 -L 11 -L 12 -L 13 \
-        -L 14 -L 15 -L 16 -L 17 -L 18 -L 19 -L 20 -L 21 -L 22 -L X -L Y \
+        gatk GenomicsDBImport -L chr1 -L chr2 -L chr3 -L chr4 -L chr5 -L chr6 -L chr7 -L chr8 -L chr9 -L chr10 \
+        -L chr11 -L chr12 -L chr13 -L chr14 -L chr15 -L chr16 -L chr17 -L chr18 -L chr19 -L chr20 -L chr21 \
+        -L chr22 -L chrX -L chrY \
         --sample-name-map {input} --genomicsdb-workspace-path {params.gdb_workspace} 2>> {log}
         touch gdb_done.txt
         """
@@ -311,7 +314,7 @@ rule gatk_combine_vcfs:
     shell:
         """
         date > {log}
-        gatk CombineGVCFs -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        gatk CombineGVCFs -R ref/Homo_sapiens_assembly38.fasta \
         --arguments_file {input} -O {output} 2>> {log}
         """
 
@@ -325,11 +328,13 @@ rule gatk_genotype_gvcfs:
     shell:
         """
         date > {log}
-        gatk GenotypeGVCFs -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa -V {input} \
+        gatk GenotypeGVCFs -R ref/Homo_sapiens_assembly38.fasta -V {input} \
         --annotate-with-num-discovered-alleles --create-output-variant-index -O {output} 2>> {log}
         """
 
 rule gatk_genotype_gvcfs_gdb:
+    input:
+        'gdb_done.txt'
     output:
         'jvars/cohort_gdb.vcf.gz'
     log:
@@ -337,15 +342,35 @@ rule gatk_genotype_gvcfs_gdb:
     shell:
         """
         date > {log}
-        gatk GenotypeGVCFs -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa -V gendb://genomicsdb \
+        gatk GenotypeGVCFs -R ref/Homo_sapiens_assembly38.fasta -V gendb://genomicsdb \
         --annotate-with-num-discovered-alleles --create-output-variant-index -O {output} 2>> {log}
         """
 
+rule gatk_validate_variants:
+    input:
+        rules.gatk_genotype_gvcfs.output 
+    output:
+        'validation_done.txt'
+    log:
+        'logs/validate_vcfs.log'
+    shell:
+        """
+        date > {log}
+        gatk ValidateVariants -R ref/Homo_sapiens_assembly38.fasta -V {input} \
+        --dbsnp ref/Homo_sapiens_assembly38.dbsnp138.vcf
+        touch {output} 2>> {log}
+        """
+
+# -an MQRankSum -an DP 
+# from gatk vqsr page: mapping quality has a very different distribution because it is 
+# not a calibrated statistic, so in some cases it can destabilize the model
+# Depth of coverage should not be used when working with exome datasets since there 
+# is extreme variation in the depth to which targets are captured
 rule gatk_calculate_vqsr_snps:
     input:
         rules.gatk_genotype_gvcfs.output
     output:
-        recal='jvars/cohort_snps_recal.txt',
+        recal='jvars/cohort_snps_recal.vcf',
         formats='jvars/cohort_snps_recal_format_plots.R',
         tranches='jvars/cohort_snps_recal_tranches_plots.txt'
     log:
@@ -354,23 +379,24 @@ rule gatk_calculate_vqsr_snps:
         """
         date > {log}
         gatk VariantRecalibrator \
-        -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        -R ref/Homo_sapiens_assembly38.fasta \
         -V {input} \
-        --resource:hapmap,known=false,training=true,truth=true,prior=15.0 ../wes/ref/resources_broad_hg38_v0_hapmap_3.3.hg38_nochr.vcf.gz \
-        --resource:omini,known=false,training=true,truth=false,prior=12.0 ../wes/ref/resources_broad_hg38_v0_1000G_omni2.5.hg38_nochr.vcf.gz \
-        --resource:1000G,known=false,training=true,truth=false,prior=10.0 ../wes/ref/resources_broad_hg38_v0_1000G_phase1.snps.high_confidence.hg38_nochr.vcf.gz \
-        --resource:dbsnp,known=true,training=false,truth=false,prior=2.0 ../wes/ref/resources_broad_hg38_v0_Homo_sapiens_assembly38.dbsnp138_nochr.vcf.gz \
-        -an DP -an QD -an FS -an SOR -an ReadPosRankSum -an MQRankSum -mode SNP -tranche 100.0 -tranche 99.0 -tranche 99.0 -tranche 95.0 -tranche 90.0 \
+        --resource:hapmap,known=false,training=true,truth=true,prior=15.0 ref/hapmap_3.3.hg38.vcf.gz \
+        --resource:omini,known=false,training=true,truth=true,prior=12.0 ref/1000G_omni2.5.hg38.vcf.gz \
+        --resource:1000G,known=false,training=true,truth=false,prior=10.0 ref/1000G_phase1.snps.high_confidence.hg38.vcf.gz \
+        --resource:dbsnp,known=true,training=false,truth=false,prior=2.0 ref/Homo_sapiens_assembly38.dbsnp138.vcf \
+        -an QD -an FS -an SOR -an ReadPosRankSum -mode SNP -tranche 100.0 -tranche 99.0 -tranche 95.0 -tranche 90.0 \
         --rscript-file {output.formats} \
         --tranches-file {output.tranches} \
         -O {output.recal} 2>> {log} 
         """
 
+# some annotation issues due to zero variance -an MQRankSum 
 rule gatk_calculate_vqsr_snps_gdb:
     input:
         rules.gatk_genotype_gvcfs_gdb.output
     output:
-        recal='jvars/cohort_snps_recal_gdb.txt',
+        recal='jvars/cohort_snps_recal_gdb.vcf',
         formats='jvars/cohort_snps_recal_format_plots_gdb.R',
         tranches='jvars/cohort_snps_recal_tranches_plots_gdb.txt'
     log:
@@ -379,24 +405,25 @@ rule gatk_calculate_vqsr_snps_gdb:
         """
         date > {log}
         gatk VariantRecalibrator \
-        -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        -R ref/Homo_sapiens_assembly38.fasta \
         -V {input} \
-        --resource:hapmap,known=false,training=true,truth=true,prior=15.0 ../wes/ref/resources_broad_hg38_v0_hapmap_3.3.hg38_nochr.vcf.gz \
-        --resource:omini,known=false,training=true,truth=false,prior=12.0 ../wes/ref/resources_broad_hg38_v0_1000G_omni2.5.hg38_nochr.vcf.gz \
-        --resource:1000G,known=false,training=true,truth=false,prior=10.0 ../wes/ref/resources_broad_hg38_v0_1000G_phase1.snps.high_confidence.hg38_nochr.vcf.gz \
-        --resource:dbsnp,known=true,training=false,truth=false,prior=2.0 ../wes/ref/resources_broad_hg38_v0_Homo_sapiens_assembly38.dbsnp138_nochr.vcf.gz \
-        -an DP -an QD -an FS -an SOR -an ReadPosRankSum -an MQRankSum -mode SNP -tranche 100.0 -tranche 99.0 -tranche 99.0 -tranche 95.0 -tranche 90.0 \
+        --resource:hapmap,known=false,training=true,truth=true,prior=15.0 ref/hapmap_3.3.hg38.vcf.gz \
+        --resource:omini,known=false,training=true,truth=true,prior=12.0 ref/1000G_omni2.5.hg38.vcf.gz \
+        --resource:1000G,known=false,training=true,truth=false,prior=10.0 ref/1000G_phase1.snps.high_confidence.hg38.vcf.gz \
+        --resource:dbsnp,known=true,training=false,truth=false,prior=2.0 ref/Homo_sapiens_assembly38.dbsnp138.vcf \
+        -an QD -an FS -an SOR -an ReadPosRankSum -mode SNP -tranche 100.0 -tranche 99.0 -tranche 99.0 -tranche 95.0 -tranche 90.0 \
         --rscript-file {output.formats} \
         --tranches-file {output.tranches} \
         -O {output.recal} 2>> {log} 
         """
 
-# some annotation caussing issues due to zero variance -an MQRankSum 
+# some annotation caussing issues due to zero variance -an MQRankSum -an MQ 
+# add https://doi.org/10.1038/nature15393 Axiom (1000G)
 rule gatk_calculate_vqsr_indels:
     input:
         rules.gatk_genotype_gvcfs.output
     output:
-        recal='jvars/cohort_indels_recal.txt',
+        recal='jvars/cohort_indels_recal.vcf',
         formats='jvars/cohort_indels_recal_format_plots.R',
         tranches='jvars/cohort_indels_recal_tranches_plots.txt'
     log:
@@ -405,21 +432,23 @@ rule gatk_calculate_vqsr_indels:
         """
         date > {log}
         gatk VariantRecalibrator \
-        -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        -R ref/Homo_sapiens_assembly38.fasta \
         -V {input} \
-        --resource:mills,known=false,training=true,truth=true,prior=15.0 ../wes/ref/resources_broad_hg38_v0_Mills_and_1000G_gold_standard.indels.hg38_nochr.vcf.gz \
-        -an QD -an MQ -an FS -an SOR -mode INDEL \
+        --resource:mills,known=false,training=true,truth=true,prior=12.0 ref/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz \
+        --resource:axiom,known=false,training=true,truth=true,prior=10 ref/Axiom_Exome_Plus.genotypes.all_populations.poly.hg38.vcf.gz \
+        --resource:dbsnp,known=true,training=false,truth=false,prior=2.0 ref/Homo_sapiens_assembly38.dbsnp138.vcf \     
+        -an QD -an FS -an SOR -mode INDEL \
         --rscript-file {output.formats} \
         --tranches-file {output.tranches} \
         -O {output.recal} 2>> {log} 
         """
 
-# -an MQRankSum 
+# -an MQRankSum -an MQ
 rule gatk_calculate_vqsr_indels_gdb:
     input:
         rules.gatk_genotype_gvcfs_gdb.output
     output:
-        recal='jvars/cohort_indels_recal_gdb.txt',
+        recal='jvars/cohort_indels_recal_gdb.vcf',
         formats='jvars/cohort_indels_recal_format_plots_gdb.R',
         tranches='jvars/cohort_indels_recal_tranches_plots_gdb.txt'
     log:
@@ -428,10 +457,12 @@ rule gatk_calculate_vqsr_indels_gdb:
         """
         date > {log}
         gatk VariantRecalibrator \
-        -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        -R ref/Homo_sapiens_assembly38.fasta \
         -V {input} \
-        --resource:mills,known=false,training=true,truth=true,prior=15.0 ../wes/ref/resources_broad_hg38_v0_Mills_and_1000G_gold_standard.indels.hg38_nochr.vcf.gz \
-        -an QD -an MQ -an SOR -an FS -mode INDEL \
+        --resource:mills,known=false,training=true,truth=true,prior=12.0 ref/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz \
+        --resource:axiom,known=false,training=true,truth=true,prior=10 ref/Axiom_Exome_Plus.genotypes.all_populations.poly.hg38.vcf.gz \
+        --resource:dbsnp,known=true,training=false,truth=false,prior=2.0 ref/Homo_sapiens_assembly38.dbsnp138.vcf \
+        -an QD -an FS -an SOR -mode INDEL \
         --rscript-file {output.formats} \
         --tranches-file {output.tranches} \
         -O {output.recal} 2>> {log} 
@@ -450,7 +481,7 @@ rule gatk_apply_vqsr_snps:
         """
         date > {log}
         gatk ApplyVQSR \
-        -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        -R ref/Homo_sapiens_assembly38.fasta \
         -V {input.vcf} \
         --truth-sensitivity-filter-level 99.0 \
         --tranches-file {input.tranches} \
@@ -472,7 +503,7 @@ rule gatk_apply_vqsr_snps_gdb:
         """
         date > {log}
         gatk ApplyVQSR \
-        -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        -R ref/Homo_sapiens_assembly38.fasta \
         -V {input.vcf} \
         --truth-sensitivity-filter-level 99.0 \
         --tranches-file {input.tranches} \
@@ -494,7 +525,7 @@ rule gatk_apply_vqsr_indels:
         """
         date > {log}
         gatk ApplyVQSR \
-        -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        -R ref/Homo_sapiens_assembly38.fasta \
         -V {input.vcf} \
         --truth-sensitivity-filter-level 99.0 \
         --tranches-file {input.tranches} \
@@ -516,7 +547,7 @@ rule gatk_apply_vqsr_indels_gdb:
         """
         date > {log}
         gatk ApplyVQSR \
-        -R ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa \
+        -R ref/Homo_sapiens_assembly38.fasta \
         -V {input.vcf} \
         --truth-sensitivity-filter-level 99.0 \
         --tranches-file {input.tranches} \
@@ -551,6 +582,7 @@ rule index_vqsr_vcfs_gdb:
         tabix {input} -f > {output} 2>> {log}
         """
 
+# have to skip using these because of differences in size of chr15 between vcf and 'truth' set
 rule gatk_genotype_posteriors:
     input:
         vcf=rules.gatk_apply_vqsr_indels.output,
@@ -563,7 +595,7 @@ rule gatk_genotype_posteriors:
         """
         date > {log}
         gatk CalculateGenotypePosteriors -V {input.vcf} \
-        -supporting ../wes/ref/1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38_nochr.vcf. \
+        -supporting ref/1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38.vcf \
         -O {output} 2>> {log}
         """
 
@@ -579,9 +611,10 @@ rule gatk_genotype_posteriors_gdb:
         """
         date > {log}
         gatk CalculateGenotypePosteriors -V {input.vcf} \
-        -supporting ../wes/ref/1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38_nochr.vcf \
+        -supporting ref/1000G.phase3.integrated.sites_only.no_MATCHED_REV.hg38.vcf \
         -O {output} 2>> {log}
         """
+# with how VQSR now works, not recommended to hard filter out any variants anymore
 
 #For SNPs:
 #QD &lt; 2.0
@@ -600,7 +633,9 @@ rule gatk_genotype_posteriors_gdb:
 
 rule gatk_filter_vars:
     input:
-        rules.gatk_genotype_posteriors.output
+#        rules.gatk_genotype_posteriors.output
+        vcf=rules.gatk_apply_vqsr_indels.output,
+        index=rules.index_vqsr_vcfs.output 
     output:
         'jvars/filtered_vars.vcf.gz'
     log:
@@ -608,7 +643,7 @@ rule gatk_filter_vars:
     shell:
         """
         date > {log}
-        gatk VariantFiltration -V {input} \
+        gatk VariantFiltration -V {input.vcf} \
         --filter-expression "GQ < 20.0" --filter-name "GQ20" \
         --filter-expression "QUAL < 30.0" --filter-name "QUAL30" \
         -O {output} 2>> {log}
@@ -616,7 +651,9 @@ rule gatk_filter_vars:
 
 rule gatk_filter_vars_gdb:
     input:
-        rules.gatk_genotype_posteriors_gdb.output
+#        rules.gatk_genotype_posteriors_gdb.output,
+        vcf=rules.gatk_apply_vqsr_indels_gdb.output,
+        index=rules.index_vqsr_vcfs_gdb.output
     output:
         'jvars/filtered_vars_gdb.vcf.gz'
     log:
@@ -624,7 +661,7 @@ rule gatk_filter_vars_gdb:
     shell:
         """
         date > {log}
-        gatk VariantFiltration -V {input} \
+        gatk VariantFiltration -V {input.vcf} \
         --filter-expression "GQ < 20.0" --filter-name "GQ20" \
         --filter-expression "QUAL < 30.0" --filter-name "QUAL30" \
         -O {output} 2>> {log}
@@ -635,40 +672,48 @@ rule gatk_var_call_metrics:
     input:
         rules.gatk_filter_vars.output 
     output:
-        'jvars/variant_call_metrics.txt'
+        'jvars/cohort.variant_calling_detail_metrics'
     log:
         'logs/gatk_var_call_metrics.log'
+    params:
+        'jvars/cohort'
     shell:
         """
         date > {log}
         gatk CollectVariantCallingMetrics -I {input} \
-        --DBSNP ../wes/ref/resources_broad_hg38_v0_Homo_sapiens_assembly38.dbsnp138.vcf \
-        -SD ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.dict \
-        -O {output} 2>> {log}
+        --DBSNP ref/Homo_sapiens_assembly38.dbsnp138.vcf \
+        -SD ref/Homo_sapiens_assembly38.dict \
+        -O {params} 2>> {log}
         """
 
 rule gatk_var_call_metrics_gdb:
     input:
         rules.gatk_filter_vars_gdb.output 
     output:
-        'jvars/variant_call_metrics_gdb.txt'
+        'jvars/cohort_gdb.variant_calling_detail_metrics'
     log:
         'logs/gatk_var_call_metrics_gdb.log'
+    params:
+        'jvars/cohort_gdb'
     shell:
         """
         date > {log}
         gatk CollectVariantCallingMetrics -I {input} \
-        --DBSNP ../wes/ref/resources_broad_hg38_v0_Homo_sapiens_assembly38.dbsnp138.vcf \
-        -SD ../wes/ref/Homo_sapiens.GRCh38.dna.primary_assembly.dict \
-        -O {output} 2>> {log}
+        --DBSNP ref/Homo_sapiens_assembly38.dbsnp138.vcf \
+        -SD ref/Homo_sapiens_assembly38.dict \
+        -O {params} 2>> {log}
         """
 
+# bcftools renannotate to remove 'chr' from contigs
+#for i in {1..22} X Y M;do echo "chr${i} ${i}";done > rename_chrom.txt
+#bcftools annotate jvars/cohort_gdb.vcf.gz --rename-chrs rename_chrom.txt -O z -o data_renamed.vcf.gz
 
+# try -tab output too
 rule vep:
     input:
         rules.gatk_filter_vars.output 
     output:
-        vcf='annotated/full_anno_vep.vcf.gz',
+        vcf='annotated/full_anno_vep.vcf',
         stats='annotated/full_anno_vep_stats.html'
     log:
         'logs/vep.log'
@@ -678,10 +723,10 @@ rule vep:
         vep -i {input} \
         --format vcf \
         --assembly GRCh38 \
-        --fasta ../wes/vep_dir/homo_sapiens/105_GRCh38/Homo_sapiens.GRCh38.dna.toplevel.fa.gz \
+        --fasta vep_dir/homo_sapiens/105_GRCh38/Homo_sapiens.GRCh38.dna.toplevel.fa.gz \
         --offline \
         --cache \
-        --dir_cache ../wes/vep_dir \
+        --dir_cache vep_dir \
         --check_existing \
         --everything \
         --per_gene \
@@ -694,8 +739,8 @@ rule vep:
         --clin_sig_allele 0 \
         --af_exac \
         --pubmed \
-        --plugin CADD,../wes/ref/gnomad.genomes.r3.0.snv.tsv.gz \
-        --plugin PostGAP,../wes/ref/postgap_GRCh38.txt.gz,ALL \
+        --plugin CADD,ref/gnomad.genomes.r3.0.snv.tsv.gz \
+        --plugin PostGAP,ref/postgap_GRCh38.txt.gz,ALL \
         --dir_plugins /home/k2142172/.vep/Plugins \
         --verbose \
         --vcf \
@@ -703,11 +748,48 @@ rule vep:
         -o {output.vcf} 2>> {log}
         """
 
+rule vep_tab:
+    input:
+        rules.gatk_filter_vars.output 
+    output:
+        vcf='annotated/full_anno_vep.tab',
+    log:
+        'logs/vep_tab.log'
+    shell:
+        """
+        date > {log}
+        vep -i {input} \
+        --format vcf \
+        --assembly GRCh38 \
+        --fasta vep_dir/homo_sapiens/105_GRCh38/Homo_sapiens.GRCh38.dna.toplevel.fa.gz \
+        --offline \
+        --cache \
+        --dir_cache vep_dir \
+        --check_existing \
+        --everything \
+        --per_gene \
+        --pick_order rank \
+        --nearest gene \
+        --overlaps \
+        --gene_phenotype \
+        --show_ref_allele \
+        --total_length \
+        --clin_sig_allele 0 \
+        --af_exac \
+        --pubmed \
+        --plugin CADD,ref/gnomad.genomes.r3.0.snv.tsv.gz \
+        --plugin PostGAP,ref/postgap_GRCh38.txt.gz,ALL \
+        --dir_plugins /home/k2142172/.vep/Plugins \
+        --verbose \
+        --tab \
+        -o {output.vcf} 2>> {log}
+        """
+
 rule vep_gdb:
     input:
         rules.gatk_filter_vars_gdb.output 
     output:
-        vcf='annotated/full_anno_vep_gdb.vcf.gz',
+        vcf='annotated/full_anno_vep_gdb.vcf',
         stats='annotated/full_anno_vep_stats_gdb.html'
     log:
         'logs/vep_gdb.log'
@@ -717,10 +799,10 @@ rule vep_gdb:
         vep -i {input} \
         --format vcf \
         --assembly GRCh38 \
-        --fasta ../wes/vep_dir/homo_sapiens/105_GRCh38/Homo_sapiens.GRCh38.dna.toplevel.fa.gz \
+        --fasta vep_dir/homo_sapiens/105_GRCh38/Homo_sapiens.GRCh38.dna.toplevel.fa.gz \
         --offline \
         --cache \
-        --dir_cache ../wes/vep_dir \
+        --dir_cache vep_dir \
         --check_existing \
         --everything \
         --per_gene \
@@ -733,8 +815,8 @@ rule vep_gdb:
         --clin_sig_allele 0 \
         --af_exac \
         --pubmed \
-        --plugin CADD,../wes/ref/gnomad.genomes.r3.0.snv.tsv.gz \
-        --plugin PostGAP,../wes/ref/postgap_GRCh38.txt.gz,ALL \
+        --plugin CADD,ref/gnomad.genomes.r3.0.snv.tsv.gz \
+        --plugin PostGAP,ref/postgap_GRCh38.txt.gz,ALL \
         --dir_plugins /home/k2142172/.vep/Plugins \
         --verbose \
         --vcf \
@@ -742,4 +824,76 @@ rule vep_gdb:
         -o {output.vcf} 2>> {log}
         """
 
+rule index_vep:
+    input:
+        rules.vep.output.vcf 
+    output:
+        vcf='annotated/full_anno_vep.vcf.gz',
+        csi='annotated/full_anno_vep.vcf.gz.csi'
+    log:
+        'logs/index_vep.log'
+    shell:
+        """
+        date > {log}
+        bgzip {input}
+        bcftools index {output.vcf}
+        """
+
+rule filter_vep:
+    input:
+        rules.index_vep.output.vcf 
+    output:
+        'annotated/impact_filtered_vep.vcf'
+    log:
+        'logs/filter_vep.log'
+    shell:
+        """
+        date > {log}
+        bcftools view -f 'PASS' {input} | filter_vep --format vcf \
+        --filter '(IMPACT = MODERATE) or (IMPACT = HIGH)' --only_matched -o {output} 2>> {log}
+        """
+        
+rule csqs_and_headers:
+    input:
+        rules.filter_vep.output
+    output:
+        csq='annotated/impact_filtered_vep_csq.txt',
+        headers='annotated/impact_filtered_vep_anno_headers.txt'
+    log:
+        'logs/csqs.log'
+    shell:
+        """
+        date > {log}
+        bcftools view -h {input} | grep CSQ > {output.csq} 2>> {log}
+        bcftools view -h {input} | tail -n 1 > {output.headers} 2>> {log}
+        """
+
+rule vcf_to_tsv:
+    input:
+        vcf=rules.filter_vep.output,
+        csq=rules.csqs_and_headers.output.csq,
+        headers=rules.csqs_and_headers.output.headers 
+    output:
+        'annotated/impact_filtered_vep.vcf.processed.RData',
+        'annotated/impact_filtered_vep.vcf.processed.tsv'
+    log:
+        'logs/vcf_to_tsv.log'
+    shell:
+        """
+        date > {log}
+        Rscript vcf_to_tsv.R \
+        {input.vcf} {input.headers} {input.csq}
+        """
+
+# bgzip annotated/full_anno_vep.vcf
+# bgzip annotated/full_anno_vep_gdb.vcf
+# bcftools index annotated/impact_filtered_vep.vcf.gz
+# bcftools index annotated/impact_filtered_vep_gdb.vcf.gz
+# bcftools index --stats annotated/impact_filtered_vep.vcf.gz > annotated/impact_filtered_vep_stats.txt
+# bcftools index --stats annotated/impact_filtered_vep_gdb.vcf.gz > annotated/impact_filtered_vep_stats_gdb.txt
+
+# need r-data.table, r-tidyverse
+#Rscript /mnt/c/Users/Prasanth/Documents/GitHub/WES_pipeline/vcf_to_tsv.R annotated/impact_filtered_vep.vcf annotated/impact_filtered_vep_anno_headers.txt annotated/impact_filtered_vep_csq.txt
+
 # validate variants
+# gatk SelectVariants --exlcude-filtered # to remove any variants that failed any site-level filter
