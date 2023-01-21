@@ -32,35 +32,49 @@ vcf.headers <- vcf.headers %>% unlist() %>% gsub('#', '', .)
 vcf.csq <- vcf.csq %>%
   separate(V1, c(NA, 'V1'), sep = ': ') %>%
   gsub(pattern = '">', replacement = '') %>%
-  unlist()
+  unlist() %>%
+  .[-1]
 
 colnames(vcf) <- vcf.headers
 
 processCsq <- function(vcf, csq) {
-  vcf2 <- vcf %>%
-    mutate(CSQ = gsub('.*CSQ=', '', INFO)) %>%
-    separate_rows(CSQ, sep = ',') %>%
-    separate(CSQ, vcf.csq, sep = '\\|')
-#    mutate_at(vars(contains('gnomAD'), as.numeric)) %>%
-#    mutate('SIFT_score' = as.numeric(str_extract(.$SIFT, '0\\.*[0-9]*')), 
-#           'PolyPhen_score' = as.numeric(str_extract(.$PolyPhen, '0\\.*[0-9]*')),
-#           'CADD_PHRED' = as.numeric(CADD_PHRED))
-  return(vcf2)
+    vcf %>%
+      mutate(CSQ = gsub('.*CSQ=', '', INFO)) %>%
+      separate_rows(CSQ, sep = ',') %>%
+      separate(CSQ, vcf.csq, sep = '\\|')
+  #    mutate_at(vars(contains('gnomAD'), as.numeric)) %>%
+  #    mutate('SIFT_score' = as.numeric(str_extract(.$SIFT, '0\\.*[0-9]*')), 
+  #           'PolyPhen_score' = as.numeric(str_extract(.$PolyPhen, '0\\.*[0-9]*')),
+  #           'CADD_PHRED' = as.numeric(CADD_PHRED))
 }
 info.df <- processCsq(vcf, vcf.csq)
 print('finished formatting csq')
 
 
-processInfo <- function(csq_df){
-  info <- csq_df %>%
-    mutate(ASTATS = gsub(';CSQ.*$', '', INFO)) %>%
-    separate(ASTATS, c('VCF_AF', 'AQ', 'AC', 'AN'), sep = ';')
-#    mutate_at(vars(c('VCF_AF', 'AQ', 'AC', 'AN'), ~ gsub('^.*=', '', .))) %>%
-#    mutate_at(vars(c('VCF_AF', 'AQ', 'AC', 'AN'), as.numeric))
-  return(info)
-}
-info.df <- processInfo(info.df)
+processInfo <- function(info_df){
+  i <- info_df[, 8]
+  ia <- gsub('CSQ.*$', '', i)
+  si <- str_split(ia, ';') %>% lapply(str_split, '=')
 
-print('writing file...')
+  df <- data.frame()
+  for(i in 1:length(si)){
+      d <- data.frame(si[[i]])
+      colnames(d) <- unname(unlist(d[1, ]))
+      d <- d[-1, ]
+      df <- bind_rows(df, d)
+      df <- df[, names(df) != ""]
+  }
+  return(df)
+}
+
+metrics.df <- processInfo(info.df)
+print('finished creating metrics file')
+
+info.df <- bind_cols(info.df, metrics.df)
+print('merged dfs')
+
+print('writing data file...')
+saveRDS(info.df, paste0(chr, '.processed.RData'))
+print('writing tsv file...')
 write.table(info.df, paste0(chr, '.processed.tsv'), sep = '\t', row.names=F, quote=F)
 print('done')
